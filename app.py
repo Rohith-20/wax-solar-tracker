@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 st.set_page_config(page_title="Solar-X Pilot Data", page_icon="🌤️", layout="wide")
 
 MINUTES_PER_TICK = 15   
-REFRESH_RATE = 0.5      # Smooth speed
+REFRESH_RATE = 0.5      
 
 MAX_ROTATION = 60
 PANEL_CAPACITY = 250    # Watts
@@ -21,20 +21,18 @@ def generate_day_profile(date_obj):
     # --- A. STRICT SUNRISE/SUNSET LOGIC ---
     # Summer (March - August)
     if 3 <= month <= 8:
-        # Sunrise: 5:45 AM (5.75) to 6:30 AM (6.5)
+        # Sunrise: 5:45 AM to 6:30 AM
         sunrise = np.random.uniform(5.75, 6.5)
-        # Sunset: 6:15 PM (18.25) to 6:40 PM (18.66)
+        # Sunset: 6:15 PM to 6:40 PM
         sunset = np.random.uniform(18.25, 18.66)
-        season = "Summer"
         base_temp = 38
     
     # Winter (September - February)
     else:
-        # Sunrise: 6:00 AM (6.0) to 6:30 AM (6.5)
+        # Sunrise: 6:00 AM to 6:30 AM
         sunrise = np.random.uniform(6.0, 6.5)
-        # Sunset: 6:00 PM (18.0) to 6:25 PM (18.41)
+        # Sunset: 6:00 PM to 6:25 PM
         sunset = np.random.uniform(18.0, 18.41)
-        season = "Winter"
         base_temp = 29
 
     # --- B. WEATHER CONDITIONS ---
@@ -42,7 +40,7 @@ def generate_day_profile(date_obj):
     
     if dice < 20: 
         condition = "Rainy" if dice < 10 else "Cloudy"
-        # Even in rain, we keep factor > 0.1 to avoid 0 irradiance mid-day
+        # Even in rain, we keep factor > 0.15 to avoid 0 irradiance mid-day
         factor = np.random.uniform(0.15, 0.4) 
         peak_temp = base_temp - np.random.randint(5, 10)
     elif dice > 90:
@@ -59,13 +57,12 @@ def generate_day_profile(date_obj):
         "sun_factor": factor,
         "peak_temp": peak_temp,
         "sunrise": sunrise,
-        "sunset": sunset,
-        "season": season
+        "sunset": sunset
     }
 
-# --- 3. INITIALIZATION (Clean V10) ---
-if 'sim_data_v10' not in st.session_state:
-    # Start at 5:00 AM to catch the earliest sunrise
+# --- 3. INITIALIZATION (Clean V11) ---
+if 'sim_data_v11' not in st.session_state:
+    # Start at 5:00 AM
     st.session_state.sim_time = datetime(2023, 1, 1, 5, 0)
     st.session_state.energy_today = 0.0
     st.session_state.max_temp_seen_today = 0.0 
@@ -73,7 +70,7 @@ if 'sim_data_v10' not in st.session_state:
     st.session_state.todays_profile = generate_day_profile(st.session_state.sim_time)
     
     st.session_state.live_power = pd.DataFrame(columns=['Time', 'Watts'])
-    st.session_state.sim_data_v10 = pd.DataFrame(columns=["Date", "Condition", "Peak_Temp_C", "Yield_Wh"])
+    st.session_state.sim_data_v11 = pd.DataFrame(columns=["Date", "Condition", "Peak_Temp_C", "Yield_Wh"])
 
 # --- 4. PHYSICS ENGINE ---
 def get_live_telemetry(current_time, day_profile):
@@ -103,7 +100,6 @@ def get_live_telemetry(current_time, day_profile):
         real_intensity = base_intensity * sun_factor
         
         # POWER FIX: Ensure mid-day doesn't drop to 0 unless it's NIGHT
-        # If it's day, minimum intensity is 0.05 (Diffuse light)
         real_intensity = max(0.05, real_intensity)
         
         irradiance = int(real_intensity * 1000)
@@ -124,10 +120,6 @@ def get_live_telemetry(current_time, day_profile):
         ambient = 22.0
         wax = 22.0
         
-    # Format times strictly for display
-    sunset_h = int(sunset)
-    sunset_m = int((sunset % 1) * 60)
-    
     return {
         "str_time": current_time.strftime("%H:%M"),
         "power": power,
@@ -135,7 +127,7 @@ def get_live_telemetry(current_time, day_profile):
         "ambient": round(ambient, 1),
         "wax": round(wax, 1),
         "is_day": is_day,
-        "sunset_display": f"{sunset_h:02d}:{sunset_m:02d}"
+        "sunset_display": f"{int(sunset)}:{int((sunset % 1) * 60):02d}"
     }
 
 # --- 5. MAIN LOOP ---
@@ -166,7 +158,7 @@ if st.session_state.sim_time.hour == 0 and st.session_state.sim_time.minute == 0
         "Peak_Temp_C": int(st.session_state.max_temp_seen_today), 
         "Yield_Wh": int(st.session_state.energy_today)
     }])
-    st.session_state.sim_data_v10 = pd.concat([st.session_state.sim_data_v10, new_record], ignore_index=True)
+    st.session_state.sim_data_v11 = pd.concat([st.session_state.sim_data_v11, new_record], ignore_index=True)
     
     # Reset
     st.session_state.energy_today = 0
@@ -179,10 +171,10 @@ curr_profile = st.session_state.todays_profile
 
 st.title("🌤️ Solar-X: Pilot Phase Monitor")
 
-# Header
-st.markdown(f"**Date:** {st.session_state.sim_time.strftime('%Y-%m-%d')} | **Season:** {curr_profile['season']} | **Condition:** {curr_profile['condition']}")
+# CLEAN HEADER (Season removed)
+st.markdown(f"**Date:** {st.session_state.sim_time.strftime('%Y-%m-%d')} | **Condition:** {curr_profile['condition']}")
 
-# SIDEBAR DEBUG (To verify Sunset Time)
+# SIDEBAR DEBUG
 st.sidebar.markdown("### 🛠️ Daily Schedule")
 st.sidebar.info(f"Scheduled Sunset: {data['sunset_display']}")
 
@@ -199,7 +191,6 @@ with tab1:
     
     st.divider()
 
-    # STRICT SYSTEM ACTIVE CHECK
     if data['irradiance'] > 0:
         st.subheader("Real-Time Power Curve (Watts)")
         st.area_chart(st.session_state.live_power.set_index("Time"), color="#FFA500")
@@ -207,7 +198,7 @@ with tab1:
         st.warning(f"🌙 SYSTEM INACTIVE: Night Mode (Irradiance: 0 W/m²)")
 
 with tab2:
-    df_hist = st.session_state.sim_data_v10
+    df_hist = st.session_state.sim_data_v11
     
     if not df_hist.empty:
         total_gen_wh = df_hist['Yield_Wh'].sum()
