@@ -52,8 +52,8 @@ def generate_day_profile(date_obj):
         "sunset": sunset
     }
 
-# --- 3. INITIALIZATION (Clean V14) ---
-if 'sim_data_v14' not in st.session_state:
+# --- 3. INITIALIZATION (Clean V15) ---
+if 'sim_data_v15' not in st.session_state:
     st.session_state.sim_time = datetime(2023, 1, 1, 5, 0)
     st.session_state.energy_today = 0.0
     st.session_state.max_temp_seen_today = 0.0 
@@ -61,7 +61,7 @@ if 'sim_data_v14' not in st.session_state:
     st.session_state.todays_profile = generate_day_profile(st.session_state.sim_time)
     
     st.session_state.live_power = pd.DataFrame(columns=['Time', 'Watts'])
-    st.session_state.sim_data_v14 = pd.DataFrame(columns=["Date", "Condition", "Peak_Temp_C", "Yield_Wh"])
+    st.session_state.sim_data_v15 = pd.DataFrame(columns=["Date", "Condition", "Peak_Temp_C", "Yield_Wh"])
 
 # --- 4. PHYSICS ENGINE ---
 def get_live_telemetry(current_time, day_profile):
@@ -78,7 +78,7 @@ def get_live_telemetry(current_time, day_profile):
     # Default Values
     health_status = "Standby" 
     health_score = 100.0
-    panel_angle = -MAX_ROTATION # Default park position (East)
+    panel_angle = -MAX_ROTATION 
     
     if is_day:
         day_length = sunset - sunrise
@@ -122,9 +122,8 @@ def get_live_telemetry(current_time, day_profile):
         wax = 22.0
         health_status = "Sleep Mode"
         health_score = 100.0
-        panel_angle = -MAX_ROTATION # Retract to East at night
+        panel_angle = -MAX_ROTATION 
         
-    # Format Angle Direction
     angle_dir = "E" if panel_angle < 0 else "W"
     angle_str = f"{abs(int(panel_angle))}° {angle_dir}"
         
@@ -137,7 +136,7 @@ def get_live_telemetry(current_time, day_profile):
         "is_day": is_day,
         "health_status": health_status,
         "health_score": round(health_score, 1),
-        "panel_angle_str": angle_str # Export formatted angle
+        "panel_angle_str": angle_str 
     }
 
 # --- 5. MAIN LOOP ---
@@ -166,7 +165,7 @@ if st.session_state.sim_time.hour == 0 and st.session_state.sim_time.minute == 0
         "Peak_Temp_C": int(st.session_state.max_temp_seen_today), 
         "Yield_Wh": int(st.session_state.energy_today)
     }])
-    st.session_state.sim_data_v14 = pd.concat([st.session_state.sim_data_v14, new_record], ignore_index=True)
+    st.session_state.sim_data_v15 = pd.concat([st.session_state.sim_data_v15, new_record], ignore_index=True)
     
     st.session_state.energy_today = 0
     st.session_state.max_temp_seen_today = 0
@@ -182,17 +181,17 @@ st.markdown(f"**Date:** {st.session_state.sim_time.strftime('%Y-%m-%d')} | **Con
 tab1, tab2 = st.tabs(["🟢 Live View", "📅 2023 Analysis"])
 
 with tab1:
-    # --- ROW 1: ENERGY (3 Cards) ---
-    c1, c2, c3 = st.columns(3)
+    # --- ROW 1: ENERGY & AMBIENT (4 Cards) ---
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("Output Power", f"{data['power']} W", curr_profile['condition'])
     c2.metric("Irradiance", f"{data['irradiance']} W/m²")
     c3.metric("Energy Today", f"{int(st.session_state.energy_today)} Wh")
-
-    # --- ROW 2: DIAGNOSTICS (4 Cards) ---
-    c4, c5, c6, c7 = st.columns(4)
     c4.metric("Ambient Temp", f"{data['ambient']} °C")
+
+    # --- ROW 2: WAX & DIAGNOSTICS (3 Cards) ---
+    c5, c6, c7 = st.columns(3)
     c5.metric("Wax Temp", f"{data['wax']} °C", f"{data['wax']-data['ambient']:.1f} ΔT")
-    c6.metric("Panel Angle", f"{data['panel_angle_str']}") # NEW CARD
+    c6.metric("Panel Angle", f"{data['panel_angle_str']}")
     c7.metric("Mechanism Health", f"{data['health_status']}", f"{data['health_score']}%")
     
     st.divider()
@@ -204,7 +203,7 @@ with tab1:
         st.warning(f"🌙 SYSTEM INACTIVE: Night Mode (Irradiance: 0 W/m²)")
 
 with tab2:
-    df_hist = st.session_state.sim_data_v14
+    df_hist = st.session_state.sim_data_v15
     
     if not df_hist.empty:
         total_gen_wh = df_hist['Yield_Wh'].sum()
