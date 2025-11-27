@@ -52,8 +52,8 @@ def generate_day_profile(date_obj):
         "sunset": sunset
     }
 
-# --- 3. INITIALIZATION (Clean V15) ---
-if 'sim_data_v15' not in st.session_state:
+# --- 3. INITIALIZATION (Clean V16) ---
+if 'sim_data_v16' not in st.session_state:
     st.session_state.sim_time = datetime(2023, 1, 1, 5, 0)
     st.session_state.energy_today = 0.0
     st.session_state.max_temp_seen_today = 0.0 
@@ -61,7 +61,7 @@ if 'sim_data_v15' not in st.session_state:
     st.session_state.todays_profile = generate_day_profile(st.session_state.sim_time)
     
     st.session_state.live_power = pd.DataFrame(columns=['Time', 'Watts'])
-    st.session_state.sim_data_v15 = pd.DataFrame(columns=["Date", "Condition", "Peak_Temp_C", "Yield_Wh"])
+    st.session_state.sim_data_v16 = pd.DataFrame(columns=["Date", "Condition", "Peak_Temp_C", "Yield_Wh"])
 
 # --- 4. PHYSICS ENGINE ---
 def get_live_telemetry(current_time, day_profile):
@@ -165,7 +165,7 @@ if st.session_state.sim_time.hour == 0 and st.session_state.sim_time.minute == 0
         "Peak_Temp_C": int(st.session_state.max_temp_seen_today), 
         "Yield_Wh": int(st.session_state.energy_today)
     }])
-    st.session_state.sim_data_v15 = pd.concat([st.session_state.sim_data_v15, new_record], ignore_index=True)
+    st.session_state.sim_data_v16 = pd.concat([st.session_state.sim_data_v16, new_record], ignore_index=True)
     
     st.session_state.energy_today = 0
     st.session_state.max_temp_seen_today = 0
@@ -188,11 +188,12 @@ with tab1:
     c3.metric("Energy Today", f"{int(st.session_state.energy_today)} Wh")
     c4.metric("Ambient Temp", f"{data['ambient']} °C")
 
-    # --- ROW 2: WAX & DIAGNOSTICS (3 Cards) ---
-    c5, c6, c7 = st.columns(3)
+    # --- ROW 2: WAX & DIAGNOSTICS (4 Columns to match Row 1) ---
+    c5, c6, c7, c8 = st.columns(4)
     c5.metric("Wax Temp", f"{data['wax']} °C", f"{data['wax']-data['ambient']:.1f} ΔT")
     c6.metric("Panel Angle", f"{data['panel_angle_str']}")
     c7.metric("Mechanism Health", f"{data['health_status']}", f"{data['health_score']}%")
+    # c8 is left empty intentionally for alignment
     
     st.divider()
 
@@ -203,7 +204,7 @@ with tab1:
         st.warning(f"🌙 SYSTEM INACTIVE: Night Mode (Irradiance: 0 W/m²)")
 
 with tab2:
-    df_hist = st.session_state.sim_data_v15
+    df_hist = st.session_state.sim_data_v16
     
     if not df_hist.empty:
         total_gen_wh = df_hist['Yield_Wh'].sum()
