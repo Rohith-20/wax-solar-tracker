@@ -8,8 +8,10 @@ from datetime import datetime, timedelta
 # --- 1. CONFIGURATION ---
 st.set_page_config(page_title="Solar-X Pilot Data", page_icon="🌤️", layout="wide")
 
-MINUTES_PER_TICK = 30   
-REFRESH_RATE = 0.1      # Fast simulation
+# --- SPEED SETTINGS (TUNED FOR 1 MINUTE = 1 DAY) ---
+MINUTES_PER_TICK = 15   # Smaller jumps (smoother data)
+REFRESH_RATE = 0.6      # Slower updates (easier to watch)
+
 MAX_ROTATION = 60
 PANEL_CAPACITY = 250    # Watts
 
@@ -44,9 +46,9 @@ def generate_new_day_weather(date_obj):
         "peak_temp": peak_temp
     }
 
-# --- 3. INITIALIZATION (Clean V4) ---
-if 'sim_data_v4' not in st.session_state:
-    # Start Date
+# --- 3. INITIALIZATION (Clean V5) ---
+if 'sim_data_v5' not in st.session_state:
+    # Start Date: Jan 1, 2023
     st.session_state.sim_time = datetime(2023, 1, 1, 6, 0)
     
     # Accumulators
@@ -58,7 +60,7 @@ if 'sim_data_v4' not in st.session_state:
     
     # Data Storage
     st.session_state.live_power = pd.DataFrame(columns=['Time', 'Watts'])
-    st.session_state.sim_data_v4 = pd.DataFrame(columns=["Date", "Condition", "Peak_Temp_C", "Yield_Wh"])
+    st.session_state.sim_data_v5 = pd.DataFrame(columns=["Date", "Condition", "Peak_Temp_C", "Yield_Wh"])
 
 # --- 4. PHYSICS ENGINE ---
 def get_live_telemetry(current_time, weather_profile):
@@ -130,7 +132,7 @@ if st.session_state.sim_time.hour == 0 and st.session_state.sim_time.minute == 0
         "Peak_Temp_C": int(st.session_state.max_temp_seen_today), 
         "Yield_Wh": int(st.session_state.energy_today)
     }])
-    st.session_state.sim_data_v4 = pd.concat([st.session_state.sim_data_v4, new_record], ignore_index=True)
+    st.session_state.sim_data_v5 = pd.concat([st.session_state.sim_data_v5, new_record], ignore_index=True)
     
     # Reset
     st.session_state.energy_today = 0
@@ -156,21 +158,20 @@ with tab1:
     st.area_chart(st.session_state.live_power.set_index("Time"), color="#FFA500")
 
 with tab2:
-    df_hist = st.session_state.sim_data_v4
+    df_hist = st.session_state.sim_data_v5
     
     if not df_hist.empty:
-        # --- NEW SECTION: TOTAL GENERATION CARD ---
+        # TOTAL GENERATION CARD
         total_gen_wh = df_hist['Yield_Wh'].sum()
         days_run = len(df_hist)
         
-        # Display as a Big Metric at the top
         kpi1, kpi2 = st.columns([1, 3])
         kpi1.metric("TOTAL ENERGY GAINED", f"{total_gen_wh/1000:.2f} kWh", f"Over {days_run} Days")
         kpi2.info("Accumulated energy yield since installation (Jan 1, 2023)")
         
         st.divider()
 
-        # --- YIELD CHART ONLY ---
+        # YIELD CHART ONLY
         st.subheader("Daily Energy Production (Wh)")
         st.bar_chart(df_hist.set_index("Date")['Yield_Wh'], color="#0000FF")
         
@@ -181,7 +182,7 @@ with tab2:
         with c2:
             st.download_button("📥 Download CSV", df_hist.to_csv(index=False).encode('utf-8'), "solar_x_2023.csv", "text/csv")
     else:
-        st.info("Gathering Day 1 Data... (Wait ~5 seconds)")
+        st.info("Gathering Day 1 Data... (Simulation running at 1 min/day)")
 
 time.sleep(REFRESH_RATE)
 st.rerun()
