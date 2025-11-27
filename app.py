@@ -60,9 +60,9 @@ def generate_day_profile(date_obj):
         "sunset": sunset
     }
 
-# --- 3. INITIALIZATION (Clean V11) ---
+# --- 3. INITIALIZATION (Final V11) ---
 if 'sim_data_v11' not in st.session_state:
-    # Start at 5:00 AM
+    # Start at 5:00 AM to capture early summer sunrises
     st.session_state.sim_time = datetime(2023, 1, 1, 5, 0)
     st.session_state.energy_today = 0.0
     st.session_state.max_temp_seen_today = 0.0 
@@ -126,8 +126,7 @@ def get_live_telemetry(current_time, day_profile):
         "irradiance": irradiance,
         "ambient": round(ambient, 1),
         "wax": round(wax, 1),
-        "is_day": is_day,
-        "sunset_display": f"{int(sunset)}:{int((sunset % 1) * 60):02d}"
+        "is_day": is_day
     }
 
 # --- 5. MAIN LOOP ---
@@ -171,12 +170,8 @@ curr_profile = st.session_state.todays_profile
 
 st.title("🌤️ Solar-X: Pilot Phase Monitor")
 
-# CLEAN HEADER (Season removed)
+# CLEAN HEADER (No Season Text)
 st.markdown(f"**Date:** {st.session_state.sim_time.strftime('%Y-%m-%d')} | **Condition:** {curr_profile['condition']}")
-
-# SIDEBAR DEBUG
-st.sidebar.markdown("### 🛠️ Daily Schedule")
-st.sidebar.info(f"Scheduled Sunset: {data['sunset_display']}")
 
 tab1, tab2 = st.tabs(["🟢 Live View", "📅 2023 Analysis"])
 
@@ -191,6 +186,7 @@ with tab1:
     
     st.divider()
 
+    # STRICT SYSTEM ACTIVE CHECK
     if data['irradiance'] > 0:
         st.subheader("Real-Time Power Curve (Watts)")
         st.area_chart(st.session_state.live_power.set_index("Time"), color="#FFA500")
