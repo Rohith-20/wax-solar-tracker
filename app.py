@@ -13,13 +13,14 @@ REFRESH_RATE = 0.3
 MAX_ROTATION = 60
 PANEL_CAPACITY = 250    # Watts
 
-# --- 2. MEMORY CLEANER (FIXES YOUR ERROR) ---
-# This block checks if the old data exists. If it does, it deletes it.
+# --- 2. MEMORY CLEANER (THE FIX) ---
+# This block detects if the app is holding "Old Data" causing the crash
 if 'history_db' in st.session_state:
-    # If the old database doesn't have the "Year" column we need, WIPE IT.
+    # Check if the required 'Year' column is missing
     if 'Year' not in st.session_state.history_db.columns:
-        st.session_state.clear()
-        st.rerun()
+        st.warning("⚠️ Upgrading Database Structure... Please wait.")
+        st.session_state.clear() # Wipe all memory
+        st.rerun() # Restart the app automatically
 
 # --- 3. THE CLIMATE ENGINE (2022-2024 SIMULATOR) ---
 def get_climate_profile(date_obj):
@@ -177,8 +178,9 @@ with tab2:
         
         st.write("**Yearly Generation Trend**")
         
-        # PIVOT TABLE (The part that was causing error)
+        # PIVOT TABLE (Error Fixed Here)
         try:
+            # We explicitly ensure columns exist
             chart_data = df_hist.pivot_table(index='Month', columns='Year', values='Yield_Wh', aggfunc='mean')
             months_order = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
             chart_data = chart_data.reindex(months_order)
@@ -204,7 +206,9 @@ with tab2:
                 csv = df_hist.to_csv(index=False).encode('utf-8')
                 st.download_button("📥 Download Report", csv, "solar_x_2022_2024.csv", "text/csv")
         except Exception as e:
-            st.error(f"Data loading... please wait or clear cache. ({e})")
+            st.error(f"Reloading data... ({e})")
+            st.session_state.clear()
+            st.rerun()
 
 time.sleep(REFRESH_RATE)
 st.rerun()
