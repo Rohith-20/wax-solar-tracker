@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 st.set_page_config(page_title="Solar-X Pilot Data", page_icon="🌤️", layout="wide")
 
 MINUTES_PER_TICK = 30   
-REFRESH_RATE = 0.3      
+REFRESH_RATE = 0.2      # Slightly faster to get through the days
 MAX_ROTATION = 60
 PANEL_CAPACITY = 250    # Watts
 
@@ -33,34 +33,17 @@ def get_climate_profile(date_obj):
         
     return max_temp, weather_factor, condition
 
-# --- 3. INITIALIZATION (Clean Start) ---
-# We use a new variable 'solar_data_2023' to ensure no old data conflicts
-if 'solar_data_2023' not in st.session_state:
-    st.session_state.sim_time = datetime.now().replace(hour=6, minute=0)
+# --- 3. INITIALIZATION (Clean Start from Jan 1) ---
+# We use 'solar_data_2023_v2' to ensure we get a fresh empty database
+if 'solar_data_2023_v2' not in st.session_state:
+    # START DATE: Jan 1, 2023 at 6:00 AM
+    st.session_state.sim_time = datetime(2023, 1, 1, 6, 0)
+    
     st.session_state.energy_today = 0.0
     st.session_state.live_power = pd.DataFrame(columns=['Time', 'Watts'])
     
-    # GENERATE JAN 2023 - JUNE 2023 DATA
-    history_data = []
-    start_date = datetime(2023, 1, 1)
-    end_date = datetime(2023, 6, 30) # Only 6 months
-    
-    current_iter_date = start_date
-    while current_iter_date <= end_date:
-        peak_temp, sun_factor, cond = get_climate_profile(current_iter_date)
-        ideal_yield = PANEL_CAPACITY * 6 
-        actual_yield = int(ideal_yield * sun_factor)
-        
-        history_data.append({
-            "Date": current_iter_date.strftime("%Y-%m-%d"),
-            "Month": current_iter_date.strftime("%b"),
-            "Condition": cond,
-            "Peak_Temp_C": peak_temp,
-            "Yield_Wh": actual_yield
-        })
-        current_iter_date += timedelta(days=1)
-        
-    st.session_state.solar_data_2023 = pd.DataFrame(history_data)
+    # HISTORY: Starts EMPTY (Builds up as simulation runs)
+    st.session_state.solar_data_2023_v2 = pd.DataFrame(columns=["Date", "Month", "Condition", "Peak_Temp_C", "Yield_Wh"])
 
 # --- 4. PHYSICS ENGINE (LIVE) ---
 def get_live_telemetry(current_time):
@@ -98,7 +81,13 @@ def get_live_telemetry(current_time):
         "condition": cond
     }
 
-# --- 5. MAIN LOOP ---
+# --- 5. MAIN LOOP & DATE LIMITER ---
+
+# Check if we passed June 30
+if st.session_state.sim_time.month > 6:
+    st.success("✅ Simulation Complete: Jan 1 to June 30 Data Generated.")
+    st.stop() # Stops the app from refreshing
+
 data = get_live_telemetry(st.session_state.sim_time)
 step_wh = data['power'] * (MINUTES_PER_TICK / 60)
 st.session_state.energy_today += step_wh
@@ -112,18 +101,18 @@ st.session_state.sim_time += timedelta(minutes=MINUTES_PER_TICK)
 if st.session_state.sim_time.hour == 0 and st.session_state.sim_time.minute == 0:
     today_rec = pd.DataFrame([{
         "Date": (st.session_state.sim_time - timedelta(days=1)).strftime("%Y-%m-%d"),
-        "Month": st.session_state.sim_time.strftime("%b"),
+        "Month": (st.session_state.sim_time - timedelta(days=1)).strftime("%b"),
         "Condition": data['condition'],
         "Peak_Temp_C": int(data['ambient']),
         "Yield_Wh": int(st.session_state.energy_today)
     }])
-    st.session_state.solar_data_2023 = pd.concat([st.session_state.solar_data_2023, today_rec], ignore_index=True)
+    st.session_state.solar_data_2023_v2 = pd.concat([st.session_state.solar_data_2023_v2, today_rec], ignore_index=True)
     st.session_state.energy_today = 0
     st.session_state.live_power = pd.DataFrame(columns=['Time', 'Watts'])
 
 # --- 6. DASHBOARD UI ---
 st.title("🌤️ Solar-X: Pilot Phase Monitor")
-st.markdown(f"**Live Simulation:** {st.session_state.sim_time.strftime('%Y-%m-%d')} | **Condition:** {data['condition']}")
+st.markdown(f"**Simulation Date:** {st.session_state.sim_time.strftime('%Y-%m-%d')} | **Condition:** {data['condition']}")
 
 tab1, tab2 = st.tabs(["🟢 Live View", "📅 2023 Analysis (Jan-Jun)"])
 
@@ -137,32 +126,35 @@ with tab1:
     st.area_chart(st.session_state.live_power.set_index("Time"), color="#FFA500")
 
 with tab2:
-    st.markdown("### 📊 H1 2023 Performance (Jan - June)")
+    st.markdown("### 📊 H1 2023 Performance (Accumulating)")
     
-    if 'solar_data_2023' in st.session_state:
-        df_hist = st.session_state.solar_data_2023
+    if 'solar_data_2023_v2' in st.session_state:
+        df_hist = st.session_state.solar_data_2023_v2
         
-        # SIMPLE BAR CHART (No complex Pivot Table to crash the app)
-        st.write("**Daily Energy Yield (Wh)**")
-        st.bar_chart(df_hist.set_index("Date")['Yield_Wh'], color="#0000FF")
-        
-        st.divider()
-        
-        c1, c2 = st.columns([3, 1])
-        with c1:
-            st.dataframe(
-                df_hist.sort_values(by="Date", ascending=False),
-                use_container_width=True,
-                column_config={
-                    "Yield_Wh": st.column_config.ProgressColumn("Energy", format="%d Wh", min_value=0, max_value=2000),
-                }
-            )
-        with c2:
-            total_kwh = df_hist['Yield_Wh'].sum() / 1000
-            st.metric("Total Generation", f"{total_kwh:.2f} kWh")
+        if not df_hist.empty:
+            # SIMPLE BAR CHART
+            st.write("**Daily Energy Yield (Wh)**")
+            st.bar_chart(df_hist.set_index("Date")['Yield_Wh'], color="#0000FF")
             
-            csv = df_hist.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Download 2023 Data", csv, "solar_x_2023.csv", "text/csv")
+            st.divider()
+            
+            c1, c2 = st.columns([3, 1])
+            with c1:
+                st.dataframe(
+                    df_hist.sort_values(by="Date", ascending=False),
+                    use_container_width=True,
+                    column_config={
+                        "Yield_Wh": st.column_config.ProgressColumn("Energy", format="%d Wh", min_value=0, max_value=2000),
+                    }
+                )
+            with c2:
+                total_kwh = df_hist['Yield_Wh'].sum() / 1000
+                st.metric("Total Generation", f"{total_kwh:.2f} kWh")
+                
+                csv = df_hist.to_csv(index=False).encode('utf-8')
+                st.download_button("📥 Download Data", csv, "solar_x_2023.csv", "text/csv")
+        else:
+            st.info("⏳ Simulation in progress... Day 1 data will appear after 24 hours (simulated).")
 
 time.sleep(REFRESH_RATE)
 st.rerun()
