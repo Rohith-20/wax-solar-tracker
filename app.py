@@ -2,171 +2,199 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import time
+import math
 
-# --- 1. CONFIGURATION & CONSTANTS ---
-st.set_page_config(page_title="Wax Solar Tracker AI", layout="wide")
+# --- 1. CONFIGURATION & PHYSICAL CONSTANTS ---
+st.set_page_config(page_title="Solar-X Wax Tracker", page_icon="☀️", layout="wide")
 
-# Mechanical Constants
-MELTING_POINT = 25       # Degrees C
-MAX_EXTENSION = 50       # mm
-DEG_PER_MM = 1.2         # Linkage geometry
-PANEL_CAPACITY = 100     # Watts (Size of your panel)
+# Mechanical Limits
+MAX_ROTATION = 60        # Panel can move -60 (East) to +60 (West) -> Total 120 degrees
+PANEL_CAPACITY = 250     # Watts (Standard single panel size)
+MELTING_POINT = 25       # Wax starts expanding
+FULL_EXPANSION_TEMP = 75 # Wax is fully expanded
 
-# --- 2. AI LOGIC MODULE (The Brain) ---
-def calculate_expected_angle(wax_temp, ambient_temp):
+# --- 2. PHYSICS ENGINE (The Brain) ---
+
+def get_sun_position(hour):
     """
-    Predicts panel angle based on differential heating.
-    Wax only expands if it is significantly hotter than ambient.
+    Returns the Sun's angle in the sky based on time.
+    6:00 AM = -90 degrees (Horizon East)
+    12:00 PM = 0 degrees (Zenith)
+    6:00 PM = +90 degrees (Horizon West)
     """
-    effective_temp_diff = wax_temp - ambient_temp
+    # Map 6-18 hours to -90 to +90 degrees
+    return (hour - 12) * 15
+
+def get_wax_expansion_angle(wax_temp, ambient_temp):
+    """
+    Calculates Panel Angle based on Wax Temperature.
+    Restricted to MAX_ROTATION (±60 degrees).
+    """
+    effective_temp = wax_temp - ambient_temp
     
-    # Wax starts working when it's 10 degrees above ambient
-    if effective_temp_diff < 10:
-        return -45 # Parked (East)
+    # Deadband: Wax needs to be at least 10C hotter than air to work
+    if effective_temp < 10:
+        return -MAX_ROTATION # Parked at East
+        
+    # Expansion Logic (Linear for simulation)
+    # Map temp range (10 to 50 delta) to angle range (-60 to +60)
+    progress = (effective_temp - 10) / 40 
+    progress = np.clip(progress, 0, 1)
     
-    # Expansion Logic
-    expansion_factor = (effective_temp_diff - 10) / 40 # Max expansion at +50 delta
-    expansion_factor = np.clip(expansion_factor, 0, 1)
+    # Convert 0-1 progress to -60 to +60 degrees
+    angle = -MAX_ROTATION + (progress * (MAX_ROTATION * 2))
+    return int(angle)
+
+def calculate_power_output(irradiance, sun_angle, panel_angle):
+    """
+    Calculates power based on Cosine Loss.
+    If Panel is at 60 deg but Sun is at 80 deg, we lose power.
+    """
+    # Calculate angular error
+    error_deg = abs(sun_angle - panel_angle)
     
-    current_extension = expansion_factor * MAX_EXTENSION
-    angle = -45 + (current_extension * DEG_PER_MM)
-    return np.clip(angle, -45, 45)
+    # Cosine efficiency (convert deg to radians)
+    efficiency = math.cos(math.radians(error_deg))
+    efficiency = max(0, efficiency) # Cannot be negative
+    
+    return int(irradiance * (PANEL_CAPACITY / 1000) * efficiency)
 
-def calculate_energy(solar_irradiance, angle_deviation):
-    """
-    Calculates power output. 
-    If panel is pointing at sun (deviation 0), we get 100% power.
-    """
-    efficiency_loss = abs(angle_deviation) * 0.5 # Lose 0.5% power per degree error
-    efficiency = max(0, 100 - efficiency_loss) / 100
-    return (solar_irradiance / 1000) * PANEL_CAPACITY * efficiency
+def get_working_condition(irradiance):
+    """Returns the Status Label based on Irradiance Energy"""
+    if irradiance < 200:
+        return "LOW", "gray"
+    elif irradiance < 600:
+        return "MEDIUM", "orange"
+    else:
+        return "HIGH", "green"
 
-# --- 3. DATA SIMULATION MODULE (The Fake Sensors) ---
+# --- 3. DATA SIMULATION (The "Predefined" 7 AM - 6 PM Data) ---
 @st.cache_data
-def generate_complete_data():
-    # Time: 6:00 AM to 6:00 PM
-    hours = np.linspace(6, 18, 100)
-    
+def generate_day_data():
+    # Create time range: 7:00 AM to 6:00 PM
+    hours = np.linspace(7, 18, 100)
     data = []
     
-    # Tracking Cumulative Energy
-    total_energy = 0
-    
-    for i, h in enumerate(hours):
-        # A. Base Weather Patterns
-        # Sun peaks at noon (12)
-        sun_curve = np.sin(((h-6)/12) * np.pi) 
-        solar_irr = max(0, sun_curve * 1000)
+    for h in hours:
+        # 1. Simulate Environment
+        sun_angle = get_sun_position(h)
         
-        # Ambient temp rises with day
-        ambient_temp = 25 + (sun_curve * 10) # 25C to 35C
+        # Sun curve (Sine wave peak at noon)
+        sun_intensity = np.sin(((h-6)/12) * np.pi)
+        irradiance = int(max(0, sun_intensity * 1000))
         
-        # Wax temp follows sun but gets much hotter
-        wax_temp = ambient_temp + (sun_curve * 40) # Up to 75C
+        # Temps
+        ambient_temp = 25 + (sun_intensity * 10) # 25C - 35C
         
-        # B. Inject "Rain Event" (2:00 PM to 3:00 PM)
-        is_raining = 0
-        if 14 <= h <= 15:
-            is_raining = 1
-            solar_irr = 200     # Dark clouds
-            wax_temp = ambient_temp # Rapid cooling
+        # Wax gets hot! (Greenhouse effect simulation)
+        # Normal operation: Wax follows sun intensity
+        wax_temp = ambient_temp + (sun_intensity * 50) 
         
-        # C. Calculate Ideal Physics
-        expected_angle = calculate_expected_angle(wax_temp, ambient_temp)
+        # 2. Simulate Mechanics
+        panel_angle = get_wax_expansion_angle(wax_temp, ambient_temp)
         
-        # D. Inject "Mechanical Jam" (4:00 PM onwards)
-        real_angle = expected_angle
-        if h > 16:
-            real_angle = 10 # Stuck at 10 degrees while expected goes back to -45
-            
-        # E. Calculate Energy
-        deviation = abs(real_angle - expected_angle)
-        power_output = calculate_energy(solar_irr, deviation)
-        total_energy += power_output * (12/100) # Integration over time step
+        # 3. Simulate Power
+        power = calculate_power_output(irradiance, sun_angle, panel_angle)
+        
+        # 4. Status
+        condition, color = get_working_condition(irradiance)
         
         data.append({
-            'Time': f"{int(h):02d}:{int((h%1)*60):02d}",
-            'Ambient_Temp': ambient_temp,
-            'Wax_Temp': wax_temp,
-            'Solar_Irradiance': int(solar_irr),
-            'Real_Angle': real_angle,
-            'Expected_Angle': expected_angle,
-            'Power_Output': round(power_output, 1),
-            'Total_Energy': round(total_energy, 1),
-            'Is_Raining': is_raining
+            "Time": f"{int(h):02d}:{int((h%1)*60):02d}",
+            "Sun_Angle": int(sun_angle),
+            "Panel_Angle": panel_angle,
+            "Ambient_Temp": round(ambient_temp, 1),
+            "Wax_Temp": round(wax_temp, 1),
+            "Irradiance": irradiance,
+            "Power": power,
+            "Condition": condition,
+            "Color": color
         })
         
     return pd.DataFrame(data)
 
-df = generate_complete_data()
+df = generate_day_data()
 
-# --- 4. UI DASHBOARD MODULE (The Website) ---
-# Initialize
+# --- 4. DASHBOARD UI ---
+
+# Initialize Session State for Animation
 if 'idx' not in st.session_state:
     st.session_state.idx = 0
 
-# Sidebar
-st.sidebar.title("🛠 Debug Panel")
-speed = st.sidebar.slider("Simulation Speed", 0.1, 1.0, 0.3)
-if st.sidebar.button("Restart"):
-    st.session_state.idx = 0
+# Sidebar Control
+with st.sidebar:
+    st.header("⚙️ Simulation Control")
+    speed = st.slider("Animation Speed", 0.05, 1.0, 0.2)
+    if st.button("Restart Day"):
+        st.session_state.idx = 0
+    
+    st.divider()
+    st.markdown("""
+    **System Limits:**
+    - Max Rotation: ±60°
+    - Panel Size: 250W
+    - Wax Melting: 25°C
+    """)
 
-# Main Header
-st.title("☀️ Eco-Track: AI-Monitored Wax Solar System")
-st.markdown("Live Telemetry | Pattern Recognition | Predictive Maintenance")
+# Main Layout
+st.title("☀️ Solar-X: Wax-Actuated Tracking System")
+st.markdown("**Real-time Telemetry & Power Generation Monitor**")
 
-# Loop
 if st.session_state.idx < len(df):
     row = df.iloc[st.session_state.idx]
     
-    # --- LOGIC: FAULT DETECTION ---
-    deviation = abs(row['Real_Angle'] - row['Expected_Angle'])
-    status = "OPTIMAL"
-    status_color = "success" # Green
+    # --- SECTION 1: LIVE CAM & STATUS ---
+    col_cam, col_status = st.columns([1, 2])
     
-    if row['Is_Raining']:
-        status = "RAIN MODE (RETRACTING)"
-        status_color = "info" # Blue
-    elif deviation > 10 and row['Solar_Irradiance'] > 500:
-        status = "⚠️ CRITICAL: MECHANICAL JAM"
-        status_color = "error" # Red
-        
-    # --- VISUALS: KEY METRICS ---
-    # Row 1: Energy & Environment
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Generate Power", f"{row['Power_Output']} W", f"Total: {row['Total_Energy']} Wh")
-    c2.metric("Solar Irradiance", f"{row['Solar_Irradiance']} W/m²")
-    c3.metric("Ambient Temp", f"{row['Ambient_Temp']:.1f} °C")
-    c4.metric("Wax Temp", f"{row['Wax_Temp']:.1f} °C", delta=f"{row['Wax_Temp'] - row['Ambient_Temp']:.1f} °C Delta")
+    with col_cam:
+        st.write("📷 **Live Site View**")
+        # Placeholder image of a solar panel
+        st.image("https://images.unsplash.com/photo-1509391366360-2e959784a276?q=80&w=1000&auto=format&fit=crop", 
+                 caption=f"Panel Position: {row['Panel_Angle']}°", use_column_width=True)
     
-    # Row 2: Mechanical Health
-    st.divider()
-    c5, c6 = st.columns([3, 1])
-    
-    with c6:
-        st.write("### System Status")
-        if status_color == "success":
-            st.success(status)
-        elif status_color == "info":
-            st.info(status)
+    with col_status:
+        # Working Condition Badge
+        st.write("### System Efficiency Status")
+        if row['Color'] == "green":
+            st.success(f"🟢 **{row['Condition']} OUTPUT** - Tracking Optimal")
+        elif row['Color'] == "orange":
+            st.warning(f"🟠 **{row['Condition']} OUTPUT** - Partial Sun")
         else:
-            st.error(status)
+            st.info(f"⚪ **{row['Condition']} OUTPUT** - Low Light / Morning")
             
-        st.metric("Angle Deviation", f"{deviation:.1f}°", help="Difference between AI Prediction and Reality")
+        st.divider()
         
-    with c5:
-        st.write("### Digital Twin Tracking")
-        # Live Chart
-        chart_data = df.iloc[:st.session_state.idx+1]
-        st.line_chart(chart_data[['Real_Angle', 'Expected_Angle']], color=["#0000FF", "#FF0000"])
-        st.caption("Blue: Real Sensor Data | Red: AI Physics Model")
+        # Key Metrics Grid
+        m1, m2, m3 = st.columns(3)
+        m1.metric("⚡ Generated Power", f"{row['Power']} W")
+        m2.metric("☀ Solar Irradiance", f"{row['Irradiance']} W/m²")
+        m3.metric("📐 Panel Angle", f"{row['Panel_Angle']}°", delta=f"Sun at {row['Sun_Angle']}°")
+        
+        m4, m5, m6 = st.columns(3)
+        m4.metric("🌡 Wax Temp", f"{row['Wax_Temp']}°C")
+        m5.metric("🌡 Ambient Temp", f"{row['Ambient_Temp']}°C")
+        m6.metric("⏳ Time", row['Time'])
 
-    # Increment
+    # --- SECTION 2: CHARTS ---
+    st.subheader("📊 Performance Analytics")
+    
+    # 1. Tracking Accuracy Chart
+    chart_data = df.iloc[:st.session_state.idx+1]
+    
+    # Prepare data for line chart
+    angle_chart = pd.DataFrame({
+        'Sun Position': chart_data['Sun_Angle'],
+        'Panel Position': chart_data['Panel_Angle']
+    })
+    st.line_chart(angle_chart, color=["#FFD700", "#0000FF"]) 
+    st.caption("Yellow: Sun Angle (-90 to +90) | Blue: Panel Angle (Limited to ±60)")
+
+    # Auto-increment logic
     time.sleep(speed)
     st.session_state.idx += 1
     st.rerun()
 
 else:
-    st.write("Daily Cycle Complete.")
-    if st.button("Reset Day"):
+    st.success("✅ Daily Generation Cycle Complete.")
+    if st.button("Start New Day"):
         st.session_state.idx = 0
