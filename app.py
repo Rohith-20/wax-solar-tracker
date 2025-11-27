@@ -6,146 +6,179 @@ import math
 from datetime import datetime, timedelta
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Solar-X Power Monitor", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="Solar-X Enterprise Monitor", page_icon="🏢", layout="wide")
 
 # Simulation Speed
-MINUTES_PER_TICK = 30  # Jump 30 mins per tick (Faster simulation)
-REFRESH_RATE = 0.3     # Update speed
+MINUTES_PER_TICK = 30   # 30 mins per refresh
+REFRESH_RATE = 0.3      # Speed of animation
 
 # Mechanical Constants
 MAX_ROTATION = 60
-PANEL_CAPACITY = 250   # Watts
+PANEL_CAPACITY = 250    # Watts
 
-# --- 2. SESSION STATE & "FAKE HISTORY" ---
-# We generate fake history so the "Weekly" chart looks good immediately
+# --- 2. SESSION STATE & DATABASE SIMULATION ---
 if 'sim_init' not in st.session_state:
-    # Start at 6:00 AM Today
+    # A. Initialize Time
     st.session_state.sim_time = datetime.now().replace(hour=6, minute=0, second=0, microsecond=0)
-    st.session_state.total_energy_today = 0.0
+    st.session_state.energy_today = 0.0
     
-    # Create a "Live" dataframe for the Area Chart (Power)
-    st.session_state.live_power_data = pd.DataFrame(columns=['Time', 'Power_Watts'])
+    # B. Live Chart Data (Empty start)
+    st.session_state.live_power = pd.DataFrame(columns=['Time', 'Watts'])
     
-    # Create "Past Week" history for the Bar Chart
-    # Simulating 7 days of random previous generation (4kWh to 6kWh range)
-    past_days = []
-    for i in range(7, 0, -1):
-        date_label = (datetime.now() - timedelta(days=i)).strftime("%a") # Mon, Tue...
-        energy_val = np.random.uniform(4000, 6500) # Random Wh
-        past_days.append({"Day": date_label, "Energy_Wh": int(energy_val)})
-    
-    st.session_state.daily_history = pd.DataFrame(past_days)
+    # C. HISTORY DATABASE (Simulating last 30 days of storage)
+    history_data = []
+    current_date = datetime.now()
+    for i in range(30, 0, -1):
+        # Generate realistic past data
+        past_date = current_date - timedelta(days=i)
+        
+        # Randomize weather: Sunny (6kWh) vs Cloudy (2kWh)
+        weather_factor = np.random.uniform(0.3, 1.0) 
+        daily_yield = int(PANEL_CAPACITY * 6 * weather_factor) # Approx Wh calculation
+        
+        history_data.append({
+            "Date": past_date.strftime("%Y-%m-%d"),
+            "Status": "Optimal" if weather_factor > 0.7 else "Low Output",
+            "Peak_Temp_C": np.random.randint(45, 70),
+            "Total_Energy_Wh": daily_yield
+        })
+        
+    st.session_state.history_db = pd.DataFrame(history_data)
     st.session_state.sim_init = True
 
 # --- 3. PHYSICS ENGINE ---
-def get_live_physics(current_time):
+def get_live_telemetry(current_time):
     hour = current_time.hour + (current_time.minute / 60)
-    is_daytime = 6 <= hour <= 18
+    is_day = 6 <= hour <= 18
     
-    if is_daytime:
-        # Physics Model
+    if is_day:
+        # Physics
         sun_angle = (hour - 12) * 15
-        sun_intensity = np.sin(((hour-6)/12) * np.pi)
-        irradiance = int(max(0, sun_intensity * 1000))
+        intensity = np.sin(((hour-6)/12) * np.pi)
+        irradiance = int(max(0, intensity * 1000))
         
         # Temps
-        ambient_temp = 25 + (sun_intensity * 10) # 25-35C
-        wax_temp = ambient_temp + (sun_intensity * 45) # Hotter
+        ambient = 25 + (intensity * 10)
+        wax = ambient + (intensity * 45)
         
-        # Angle
-        target_angle = -MAX_ROTATION + ((wax_temp - 35)/40 * (MAX_ROTATION*2))
+        # Power
+        target_angle = -MAX_ROTATION + ((wax - 35)/40 * (MAX_ROTATION*2))
         panel_angle = np.clip(target_angle, -MAX_ROTATION, MAX_ROTATION)
         
-        # Power Calculation (Cosine Loss)
-        error_deg = abs(sun_angle - panel_angle)
-        efficiency = math.cos(math.radians(error_deg))
-        power = int(irradiance * (PANEL_CAPACITY / 1000) * max(0, efficiency))
+        error = abs(sun_angle - panel_angle)
+        efficiency = math.cos(math.radians(error))
+        power = int(irradiance * (PANEL_CAPACITY/1000) * max(0, efficiency))
     else:
         # Night
-        irradiance = 0
-        ambient_temp = 22.0
-        wax_temp = 22.0
-        panel_angle = -60
         power = 0
+        ambient = 22.0
+        wax = 22.0
         
     return {
-        "time_obj": current_time,
-        "time_str": current_time.strftime("%H:%M"),
-        "ambient": round(ambient_temp, 1),
-        "wax_temp": round(wax_temp, 1),
+        "str_time": current_time.strftime("%H:%M"),
         "power": power,
-        "is_day": is_daytime
+        "ambient": round(ambient, 1),
+        "wax": round(wax, 1),
+        "is_day": is_day
     }
 
 # --- 4. MAIN LOOP ---
-live_data = get_live_physics(st.session_state.sim_time)
+data = get_live_telemetry(st.session_state.sim_time)
 
-# Update Energy (Accumulation)
-step_energy = live_data['power'] * (MINUTES_PER_TICK / 60)
-st.session_state.total_energy_today += step_energy
+# Accumulate Energy
+step_wh = data['power'] * (MINUTES_PER_TICK / 60)
+st.session_state.energy_today += step_wh
 
-# Update Charts
-# 1. Live Power Chart (Last 50 ticks)
-new_power_row = pd.DataFrame([{"Time": live_data['time_str'], "Power_Watts": live_data['power']}])
-st.session_state.live_power_data = pd.concat([st.session_state.live_power_data, new_power_row], ignore_index=True)
-if len(st.session_state.live_power_data) > 50:
-    st.session_state.live_power_data = st.session_state.live_power_data.iloc[1:]
+# Update Live Chart
+new_row = pd.DataFrame([{"Time": data['str_time'], "Watts": data['power']}])
+st.session_state.live_power = pd.concat([st.session_state.live_power, new_row], ignore_index=True)
 
-# Time Advance
+# Advance Time
 st.session_state.sim_time += timedelta(minutes=MINUTES_PER_TICK)
 
-# New Day Logic
+# New Day Logic (Save to History DB)
 if st.session_state.sim_time.hour == 0 and st.session_state.sim_time.minute == 0:
-    # Save today's total to history
-    today_label = st.session_state.sim_time.strftime("%a")
-    new_day_row = pd.DataFrame([{"Day": "Today", "Energy_Wh": int(st.session_state.total_energy_today)}])
+    # Create record
+    yesterday_record = pd.DataFrame([{
+        "Date": (st.session_state.sim_time - timedelta(days=1)).strftime("%Y-%m-%d"),
+        "Status": "Optimal",
+        "Peak_Temp_C": 65, # Simulated peak
+        "Total_Energy_Wh": int(st.session_state.energy_today)
+    }])
+    # Append to DB
+    st.session_state.history_db = pd.concat([st.session_state.history_db, yesterday_record], ignore_index=True)
+    # Reset
+    st.session_state.energy_today = 0
+    st.session_state.live_power = pd.DataFrame(columns=['Time', 'Watts'])
+
+# --- 5. UI LAYOUT (TABS) ---
+st.title("⚡ Solar-X: Enterprise Monitor")
+
+# CREATE TABS HERE
+tab1, tab2 = st.tabs(["📈 Live Dashboard", "🗃️ Historical Reports"])
+
+with tab1:
+    # --- LIVE VIEW ---
+    st.markdown("### 🟢 Real-Time Operations")
     
-    # Append to bar chart history
-    st.session_state.daily_history = pd.concat([st.session_state.daily_history, new_day_row], ignore_index=True)
+    # Metrics
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("⚡ Output", f"{data['power']} W", delta="Generating" if data['power'] > 0 else "Idle")
+    m2.metric("🔋 Energy Today", f"{int(st.session_state.energy_today)} Wh")
+    m3.metric("🌡 Ambient Air", f"{data['ambient']} °C")
+    m4.metric("🌡 Wax Cylinder", f"{data['wax']} °C", f"{data['wax'] - data['ambient']:.1f} ΔT")
     
-    # Reset for tomorrow
-    st.session_state.total_energy_today = 0
-    st.session_state.live_power_data = pd.DataFrame(columns=['Time', 'Power_Watts']) # Clear live chart
-
-# --- 5. DASHBOARD UI (TRADING STYLE) ---
-
-st.title("⚡ Solar-X: Generation Dashboard")
-st.markdown("### 🟢 Live Site Performance")
-
-# A. METRICS ROW (Added Ambient Temp Here)
-kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-
-kpi1.metric("⚡ Live Power Output", f"{live_data['power']} W", delta="Active" if live_data['power']>0 else "Idle")
-kpi2.metric("🔋 Energy Today", f"{int(st.session_state.total_energy_today)} Wh", "Accumulating...")
-# SEPARATED AMBIENT TEMP AS REQUESTED
-kpi3.metric("🌡 Ambient Temp", f"{live_data['ambient']} °C", "Air")
-kpi4.metric("🌡 Wax Actuator", f"{live_data['wax_temp']} °C", f"{live_data['wax_temp']-live_data['ambient']:.1f} ΔT")
-
-# B. CHARTS ROW
-c1, c2 = st.columns([2, 1])
-
-with c1:
-    st.subheader("📈 Live Power Curve (Watts)")
-    # Area Chart looks like a Trading Chart
-    st.area_chart(st.session_state.live_power_data.set_index("Time"), color="#00ff00")
-    st.caption("Real-time power generation profile (30-min intervals)")
-
-with c2:
-    st.subheader("📊 Weekly Yield (Wh)")
-    # Bar Chart for Daily/Weekly History
-    # We combine Past History + Current Day for the chart
-    current_day_df = pd.DataFrame([{"Day": "Today", "Energy_Wh": int(st.session_state.total_energy_today)}])
-    full_history = pd.concat([st.session_state.daily_history, current_day_df], ignore_index=True)
+    st.divider()
     
-    st.bar_chart(full_history.set_index("Day"), color="#FF4B4B")
-    st.caption("Daily Energy Harvested (Last 7 Days + Today)")
+    # SINGLE CHART (Watts per Hour)
+    st.subheader("Live Power Curve (Watts/Hour)")
+    # Using Area chart for that "Trading" look
+    st.area_chart(st.session_state.live_power.set_index("Time"), color="#00FF00")
+    
+    if data['is_day']:
+        st.success(f"✅ SYSTEM ACTIVE | Time: {data['str_time']}")
+    else:
+        st.info(f"🌙 NIGHT MODE | Time: {data['str_time']}")
 
-# C. STATUS FOOTER
-if live_data['is_day']:
-    st.success(f"✅ SYSTEM OPTIMAL | Time: {live_data['time_str']} | Tracking Sun Position")
-else:
-    st.info(f"🌙 NIGHT MODE | Time: {live_data['time_str']} | System Retracted")
+with tab2:
+    # --- HISTORY VIEW ---
+    st.markdown("### 🗃️ System Data Logs")
+    
+    c1, c2 = st.columns([3, 1])
+    
+    with c1:
+        st.write(" **Daily Yield Database (Last 30 Days)**")
+        # Show the DataFrame as a clean interactive table
+        st.dataframe(
+            st.session_state.history_db.sort_values(by="Date", ascending=False),
+            use_container_width=True,
+            column_config={
+                "Date": "Date",
+                "Total_Energy_Wh": st.column_config.NumberColumn("Yield (Wh)", format="%d Wh"),
+                "Peak_Temp_C": "Max Wax Temp (°C)",
+                "Status": "System Health"
+            }
+        )
+    
+    with c2:
+        st.write(" **Export Data**")
+        st.write("Download full logs for sustenance engineering analysis.")
+        
+        # Convert DF to CSV for download
+        csv = st.session_state.history_db.to_csv(index=False).encode('utf-8')
+        
+        st.download_button(
+            label="📥 Download CSV",
+            data=csv,
+            file_name='solar_x_history.csv',
+            mime='text/csv',
+        )
+        
+        st.divider()
+        st.metric("Total Days Logged", len(st.session_state.history_db))
+        total_lifetime = st.session_state.history_db['Total_Energy_Wh'].sum() / 1000
+        st.metric("Lifetime Generation", f"{total_lifetime:.1f} kWh")
 
-# Refresh
+# Refresh Loop
 time.sleep(REFRESH_RATE)
 st.rerun()
