@@ -13,16 +13,7 @@ REFRESH_RATE = 0.3
 MAX_ROTATION = 60
 PANEL_CAPACITY = 250    # Watts
 
-# --- 2. MEMORY CLEANER (THE FIX) ---
-# This block detects if the app is holding "Old Data" causing the crash
-if 'history_db' in st.session_state:
-    # Check if the required 'Year' column is missing
-    if 'Year' not in st.session_state.history_db.columns:
-        st.warning("⚠️ Upgrading Database Structure... Please wait.")
-        st.session_state.clear() # Wipe all memory
-        st.rerun() # Restart the app automatically
-
-# --- 3. THE CLIMATE ENGINE (2022-2024 SIMULATOR) ---
+# --- 2. THE CLIMATE ENGINE (2022-2024 SIMULATOR) ---
 def get_climate_profile(date_obj):
     month = date_obj.month
     
@@ -59,15 +50,15 @@ def get_climate_profile(date_obj):
         
     return max_temp, weather_factor, condition
 
-# --- 4. SESSION STATE INITIALIZATION ---
-if 'sim_init' not in st.session_state:
+# --- 3. SESSION STATE INITIALIZATION ---
+# NOTE: We renamed 'history_db' to 'history_db_v2' to fix the crash
+if 'sim_init_v2' not in st.session_state:
     st.session_state.sim_time = datetime.now().replace(hour=6, minute=0)
     st.session_state.energy_today = 0.0
     st.session_state.live_power = pd.DataFrame(columns=['Time', 'Watts'])
     
     # GENERATE 2022-2024 HISTORY DATABASE
     history_data = []
-    # Generate data starting from Jan 1, 2022
     start_date = datetime(2022, 1, 1)
     end_date = datetime.now() - timedelta(days=1)
     
@@ -82,17 +73,17 @@ if 'sim_init' not in st.session_state:
         history_data.append({
             "Date": current_iter_date.strftime("%Y-%m-%d"),
             "Year": current_iter_date.year,
-            "Month": current_iter_date.strftime("%b"), # This is the KEY column needed
+            "Month": current_iter_date.strftime("%b"), 
             "Condition": cond,
             "Peak_Temp_C": peak_temp,
             "Yield_Wh": actual_yield
         })
         current_iter_date += timedelta(days=1)
         
-    st.session_state.history_db = pd.DataFrame(history_data)
-    st.session_state.sim_init = True
+    st.session_state.history_db_v2 = pd.DataFrame(history_data)
+    st.session_state.sim_init_v2 = True
 
-# --- 5. PHYSICS ENGINE (LIVE) ---
+# --- 4. PHYSICS ENGINE (LIVE) ---
 def get_live_telemetry(current_time):
     peak_temp_today, weather_factor_today, cond = get_climate_profile(current_time)
     
@@ -129,7 +120,7 @@ def get_live_telemetry(current_time):
         "condition": cond
     }
 
-# --- 6. MAIN LOOP ---
+# --- 5. MAIN LOOP ---
 data = get_live_telemetry(st.session_state.sim_time)
 step_wh = data['power'] * (MINUTES_PER_TICK / 60)
 st.session_state.energy_today += step_wh
@@ -149,11 +140,11 @@ if st.session_state.sim_time.hour == 0 and st.session_state.sim_time.minute == 0
         "Peak_Temp_C": int(data['ambient']),
         "Yield_Wh": int(st.session_state.energy_today)
     }])
-    st.session_state.history_db = pd.concat([st.session_state.history_db, today_rec], ignore_index=True)
+    st.session_state.history_db_v2 = pd.concat([st.session_state.history_db_v2, today_rec], ignore_index=True)
     st.session_state.energy_today = 0
     st.session_state.live_power = pd.DataFrame(columns=['Time', 'Watts'])
 
-# --- 7. DASHBOARD UI ---
+# --- 6. DASHBOARD UI ---
 st.title("🌤️ Solar-X: Climate-Aware Tracking System")
 st.markdown(f"**Current Simulation:** {st.session_state.sim_time.strftime('%Y-%m-%d')} | **Weather:** {data['condition']}")
 
@@ -172,15 +163,14 @@ with tab1:
 with tab2:
     st.markdown("### 📊 Performance Analysis (2022 - 2024)")
     
-    # SAFEGUARD: Ensure data is loaded
-    if 'history_db' in st.session_state:
-        df_hist = st.session_state.history_db
+    # Use the NEW database variable
+    if 'history_db_v2' in st.session_state:
+        df_hist = st.session_state.history_db_v2
         
         st.write("**Yearly Generation Trend**")
         
-        # PIVOT TABLE (Error Fixed Here)
+        # PIVOT TABLE 
         try:
-            # We explicitly ensure columns exist
             chart_data = df_hist.pivot_table(index='Month', columns='Year', values='Yield_Wh', aggfunc='mean')
             months_order = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
             chart_data = chart_data.reindex(months_order)
@@ -206,9 +196,7 @@ with tab2:
                 csv = df_hist.to_csv(index=False).encode('utf-8')
                 st.download_button("📥 Download Report", csv, "solar_x_2022_2024.csv", "text/csv")
         except Exception as e:
-            st.error(f"Reloading data... ({e})")
-            st.session_state.clear()
-            st.rerun()
+            st.error(f"Error displaying data: {e}")
 
 time.sleep(REFRESH_RATE)
 st.rerun()
