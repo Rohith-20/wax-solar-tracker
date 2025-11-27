@@ -8,9 +8,9 @@ from datetime import datetime, timedelta
 # --- 1. CONFIGURATION ---
 st.set_page_config(page_title="Solar-X Pilot Data", page_icon="🌤️", layout="wide")
 
-# --- SPEED SETTINGS (TUNED FOR 1 MINUTE = 1 DAY) ---
-MINUTES_PER_TICK = 15   # Smaller jumps (smoother data)
-REFRESH_RATE = 0.6      # Slower updates (easier to watch)
+# SPEED SETTINGS (1 Minute = 1 Day)
+MINUTES_PER_TICK = 15   
+REFRESH_RATE = 0.6      
 
 MAX_ROTATION = 60
 PANEL_CAPACITY = 250    # Watts
@@ -19,12 +19,10 @@ PANEL_CAPACITY = 250    # Watts
 def generate_new_day_weather(date_obj):
     month = date_obj.month
     
-    # Base Seasonal Temps
     if month <= 2: base = 28
     elif 3 <= month <= 5: base = 38
     else: base = 32
     
-    # Random Event Generator
     dice = np.random.randint(0, 100)
     
     if dice < 25: 
@@ -46,21 +44,15 @@ def generate_new_day_weather(date_obj):
         "peak_temp": peak_temp
     }
 
-# --- 3. INITIALIZATION (Clean V5) ---
-if 'sim_data_v5' not in st.session_state:
-    # Start Date: Jan 1, 2023
+# --- 3. INITIALIZATION (V6) ---
+if 'sim_data_v6' not in st.session_state:
     st.session_state.sim_time = datetime(2023, 1, 1, 6, 0)
-    
-    # Accumulators
     st.session_state.energy_today = 0.0
     st.session_state.max_temp_seen_today = 0.0 
-    
-    # Day 1 Weather
     st.session_state.todays_weather = generate_new_day_weather(st.session_state.sim_time)
     
-    # Data Storage
     st.session_state.live_power = pd.DataFrame(columns=['Time', 'Watts'])
-    st.session_state.sim_data_v5 = pd.DataFrame(columns=["Date", "Condition", "Peak_Temp_C", "Yield_Wh"])
+    st.session_state.sim_data_v6 = pd.DataFrame(columns=["Date", "Condition", "Peak_Temp_C", "Yield_Wh"])
 
 # --- 4. PHYSICS ENGINE ---
 def get_live_telemetry(current_time, weather_profile):
@@ -89,12 +81,14 @@ def get_live_telemetry(current_time, weather_profile):
         power = int(irradiance * (PANEL_CAPACITY/1000) * max(0, efficiency))
     else:
         power = 0
+        irradiance = 0 # Night
         ambient = 22.0
         wax = 22.0
         
     return {
         "str_time": current_time.strftime("%H:%M"),
         "power": power,
+        "irradiance": irradiance, # ADDED THIS FOR THE NEW CARD
         "ambient": round(ambient, 1),
         "wax": round(wax, 1),
         "is_day": is_day
@@ -132,7 +126,7 @@ if st.session_state.sim_time.hour == 0 and st.session_state.sim_time.minute == 0
         "Peak_Temp_C": int(st.session_state.max_temp_seen_today), 
         "Yield_Wh": int(st.session_state.energy_today)
     }])
-    st.session_state.sim_data_v5 = pd.concat([st.session_state.sim_data_v5, new_record], ignore_index=True)
+    st.session_state.sim_data_v6 = pd.concat([st.session_state.sim_data_v6, new_record], ignore_index=True)
     
     # Reset
     st.session_state.energy_today = 0
@@ -149,19 +143,29 @@ st.markdown(f"**Date:** {st.session_state.sim_time.strftime('%Y-%m-%d')} | **Con
 tab1, tab2 = st.tabs(["🟢 Live View", "📅 2023 Analysis"])
 
 with tab1:
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Output Power", f"{data['power']} W", curr_weather['condition'])
-    m2.metric("Energy Today", f"{int(st.session_state.energy_today)} Wh")
-    m3.metric("Ambient Temp", f"{data['ambient']} °C")
-    m4.metric("Wax Temp", f"{data['wax']} °C")
+    # --- UPDATED: 5 CARDS IN ONE ROW ---
+    c1, c2, c3, c4, c5 = st.columns(5)
     
-    st.area_chart(st.session_state.live_power.set_index("Time"), color="#FFA500")
+    c1.metric("Output Power", f"{data['power']} W", curr_weather['condition'])
+    c2.metric("Irradiance", f"{data['irradiance']} W/m²") # NEW CARD
+    c3.metric("Energy Today", f"{int(st.session_state.energy_today)} Wh")
+    c4.metric("Ambient Temp", f"{data['ambient']} °C")
+    c5.metric("Wax Temp", f"{data['wax']} °C")
+    
+    st.divider()
+
+    # --- UPDATED: NIGHT MODE GRAPH LOGIC ---
+    if data['is_day']:
+        st.subheader("Real-Time Power Curve (Watts)")
+        st.area_chart(st.session_state.live_power.set_index("Time"), color="#FFA500")
+    else:
+        # Show this message at night instead of the chart
+        st.info(f"🌙 System Standby: Irradiance is Zero. Tracking Paused. (Time: {data['str_time']})")
 
 with tab2:
-    df_hist = st.session_state.sim_data_v5
+    df_hist = st.session_state.sim_data_v6
     
     if not df_hist.empty:
-        # TOTAL GENERATION CARD
         total_gen_wh = df_hist['Yield_Wh'].sum()
         days_run = len(df_hist)
         
@@ -171,11 +175,9 @@ with tab2:
         
         st.divider()
 
-        # YIELD CHART ONLY
         st.subheader("Daily Energy Production (Wh)")
         st.bar_chart(df_hist.set_index("Date")['Yield_Wh'], color="#0000FF")
         
-        # Data Table & Download
         c1, c2 = st.columns([3, 1])
         with c1:
             st.dataframe(df_hist.sort_values(by="Date", ascending=False), use_container_width=True)
