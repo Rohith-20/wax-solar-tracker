@@ -13,7 +13,6 @@ REFRESH_RATE = 0.5
 
 MAX_ROTATION = 60
 PANEL_CAPACITY = 250    # Watts
-CO2_FACTOR = 0.71       # kg CO2 per kWh
 ELECTRIC_RATE = 8.0     # Rupees per Unit (kWh)
 
 # --- 2. ROBUST WEATHER & TIME ENGINE ---
@@ -54,8 +53,8 @@ def generate_day_profile(date_obj):
         "sunset": sunset
     }
 
-# --- 3. INITIALIZATION (Clean V18) ---
-if 'sim_data_v18' not in st.session_state:
+# --- 3. INITIALIZATION (Clean V19) ---
+if 'sim_data_v19' not in st.session_state:
     st.session_state.sim_time = datetime(2023, 1, 1, 5, 0)
     st.session_state.energy_today = 0.0
     st.session_state.max_temp_seen_today = 0.0 
@@ -63,7 +62,7 @@ if 'sim_data_v18' not in st.session_state:
     st.session_state.todays_profile = generate_day_profile(st.session_state.sim_time)
     
     st.session_state.live_power = pd.DataFrame(columns=['Time', 'Watts'])
-    st.session_state.sim_data_v18 = pd.DataFrame(columns=["Date", "Condition", "Peak_Temp_C", "Yield_Wh"])
+    st.session_state.sim_data_v19 = pd.DataFrame(columns=["Date", "Condition", "Peak_Temp_C", "Yield_Wh"])
 
 # --- 4. PHYSICS ENGINE ---
 def get_live_telemetry(current_time, day_profile):
@@ -109,7 +108,6 @@ def get_live_telemetry(current_time, day_profile):
         
         # --- ELECTRICAL LOGIC (V & I) ---
         if power > 0:
-            # Simulate MPPT Voltage (Around 30V for a 250W panel)
             voltage = 29.5 + np.random.uniform(-0.5, 0.5)
             current = power / voltage
         else:
@@ -141,8 +139,6 @@ def get_live_telemetry(current_time, day_profile):
         
     angle_dir = "E" if panel_angle < 0 else "W"
     angle_str = f"{abs(int(panel_angle))}° {angle_dir}"
-    
-    # Format Electrical String
     elec_str = f"{voltage:.1f}V • {current:.1f}A"
         
     return {
@@ -184,7 +180,7 @@ if st.session_state.sim_time.hour == 0 and st.session_state.sim_time.minute == 0
         "Peak_Temp_C": int(st.session_state.max_temp_seen_today), 
         "Yield_Wh": int(st.session_state.energy_today)
     }])
-    st.session_state.sim_data_v18 = pd.concat([st.session_state.sim_data_v18, new_record], ignore_index=True)
+    st.session_state.sim_data_v19 = pd.concat([st.session_state.sim_data_v19, new_record], ignore_index=True)
     
     st.session_state.energy_today = 0
     st.session_state.max_temp_seen_today = 0
@@ -202,21 +198,17 @@ tab1, tab2 = st.tabs(["🟢 Live View", "📅 2023 Analysis"])
 with tab1:
     # --- ROW 1: ENERGY & AMBIENT (4 Cards) ---
     c1, c2, c3, c4 = st.columns(4)
-    # Output Power now shows Voltage & Current in the 'delta' slot
     c1.metric("Output Power", f"{data['power']} W", data['elec_str'])
     c2.metric("Irradiance", f"{data['irradiance']} W/m²")
     c3.metric("Energy Today", f"{int(st.session_state.energy_today)} Wh")
     c4.metric("Ambient Temp", f"{data['ambient']} °C")
 
-    # --- ROW 2: DIAGNOSTICS & IMPACT (4 Cards) ---
+    # --- ROW 2: DIAGNOSTICS (4 Columns - Last one empty) ---
     c5, c6, c7, c8 = st.columns(4)
     c5.metric("Wax Temp", f"{data['wax']} °C", f"{data['wax']-data['ambient']:.1f} ΔT")
     c6.metric("Panel Angle", f"{data['panel_angle_str']}")
     c7.metric("Mechanism Health", f"{data['health_status']}", f"{data['health_score']}%")
-    
-    # CO2 SAVED
-    co2_saved = (st.session_state.energy_today / 1000) * CO2_FACTOR
-    c8.metric("CO₂ Offset", f"{co2_saved:.3f} kg", "Daily Impact")
+    # c8 is empty for alignment
     
     st.divider()
 
@@ -227,20 +219,19 @@ with tab1:
         st.warning(f"🌙 SYSTEM INACTIVE: Night Mode (Irradiance: 0 W/m²)")
 
 with tab2:
-    df_hist = st.session_state.sim_data_v18
+    df_hist = st.session_state.sim_data_v19
     
     if not df_hist.empty:
         total_gen_wh = df_hist['Yield_Wh'].sum()
         days_run = len(df_hist)
         
-        # FINANCIAL ROI CALCULATION
+        # FINANCIAL ROI
         total_savings = (total_gen_wh / 1000) * ELECTRIC_RATE
         
-        # --- NEW LAYOUT FOR TAB 2 ---
         kpi1, kpi2, kpi3 = st.columns([1, 1, 2])
         kpi1.metric("TOTAL ENERGY", f"{total_gen_wh/1000:.2f} kWh", f"Over {days_run} Days")
         kpi2.metric("ESTIMATED SAVINGS", f"₹ {total_savings:,.2f}", "@ ₹8/unit")
-        kpi3.info("Financial ROI based on commercial electricity rates in Chennai.")
+        kpi3.info("Financial ROI based on commercial electricity rates.")
         
         st.divider()
 
