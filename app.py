@@ -16,8 +16,9 @@ REFRESH_RATE = 0.3      # Speed of animation
 MAX_ROTATION = 60
 PANEL_CAPACITY = 250    # Watts
 
-# --- 2. SESSION STATE & DATABASE SIMULATION ---
-if 'sim_init' not in st.session_state:
+# --- 2. SESSION STATE & DATABASE SIMULATION (FIXED) ---
+# We now check for the specific variable 'energy_today' to prevent crashing
+if 'energy_today' not in st.session_state:
     # A. Initialize Time
     st.session_state.sim_time = datetime.now().replace(hour=6, minute=0, second=0, microsecond=0)
     st.session_state.energy_today = 0.0
@@ -44,7 +45,6 @@ if 'sim_init' not in st.session_state:
         })
         
     st.session_state.history_db = pd.DataFrame(history_data)
-    st.session_state.sim_init = True
 
 # --- 3. PHYSICS ENGINE ---
 def get_live_telemetry(current_time):
