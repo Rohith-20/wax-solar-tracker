@@ -3,198 +3,164 @@ import pandas as pd
 import numpy as np
 import time
 import math
+from datetime import datetime, timedelta
 
-# --- 1. CONFIGURATION & PHYSICAL CONSTANTS ---
-st.set_page_config(page_title="Solar-X Wax Tracker", page_icon="☀️", layout="wide")
+# --- 1. CONFIGURATION ---
+st.set_page_config(page_title="Solar-X Live Monitor", page_icon="📡", layout="wide")
 
-# Mechanical Limits
-MAX_ROTATION = 60        # Panel can move -60 (East) to +60 (West) -> Total 120 degrees
-PANEL_CAPACITY = 250     # Watts (Standard single panel size)
-MELTING_POINT = 25       # Wax starts expanding
-FULL_EXPANSION_TEMP = 75 # Wax is fully expanded
+# Simulation Settings
+# 1 "Tick" in simulation = 15 minutes of real time
+MINUTES_PER_TICK = 15 
+# How fast the app updates (in seconds)
+REFRESH_RATE = 0.5 
 
-# --- 2. PHYSICS ENGINE (The Brain) ---
+# Mechanical Constants
+MAX_ROTATION = 60        # ±60 degrees
+PANEL_CAPACITY = 250     # Watts
 
-def get_sun_position(hour):
+# --- 2. SESSION STATE INITIALIZATION (The "Memory") ---
+if 'sim_time' not in st.session_state:
+    # Start simulation at 5:00 AM on Day 1
+    st.session_state.sim_time = datetime(2025, 1, 1, 5, 0, 0)
+    st.session_state.total_energy = 0.0
+    st.session_state.data_history = pd.DataFrame(columns=['Time', 'Sun_Angle', 'Panel_Angle', 'Power'])
+    st.session_state.day_count = 1
+
+# --- 3. PHYSICS ENGINE (Continuous) ---
+
+def get_live_physics(current_time):
     """
-    Returns the Sun's angle in the sky based on time.
-    6:00 AM = -90 degrees (Horizon East)
-    12:00 PM = 0 degrees (Zenith)
-    6:00 PM = +90 degrees (Horizon West)
+    Generates a single data point based on the exact time of day.
+    Handles Day/Night transitions automatically.
     """
-    # Map 6-18 hours to -90 to +90 degrees
-    return (hour - 12) * 15
-
-def get_wax_expansion_angle(wax_temp, ambient_temp):
-    """
-    Calculates Panel Angle based on Wax Temperature.
-    Restricted to MAX_ROTATION (±60 degrees).
-    """
-    effective_temp = wax_temp - ambient_temp
+    hour = current_time.hour + (current_time.minute / 60)
     
-    # Deadband: Wax needs to be at least 10C hotter than air to work
-    if effective_temp < 10:
-        return -MAX_ROTATION # Parked at East
-        
-    # Expansion Logic (Linear for simulation)
-    # Map temp range (10 to 50 delta) to angle range (-60 to +60)
-    progress = (effective_temp - 10) / 40 
-    progress = np.clip(progress, 0, 1)
+    # A. Sun Position (Simple 6am-6pm model)
+    # If it's night (before 6 or after 18), sun is "down"
+    is_daytime = 6 <= hour <= 18
     
-    # Convert 0-1 progress to -60 to +60 degrees
-    angle = -MAX_ROTATION + (progress * (MAX_ROTATION * 2))
-    return int(angle)
-
-def calculate_power_output(irradiance, sun_angle, panel_angle):
-    """
-    Calculates power based on Cosine Loss.
-    If Panel is at 60 deg but Sun is at 80 deg, we lose power.
-    """
-    # Calculate angular error
-    error_deg = abs(sun_angle - panel_angle)
-    
-    # Cosine efficiency (convert deg to radians)
-    efficiency = math.cos(math.radians(error_deg))
-    efficiency = max(0, efficiency) # Cannot be negative
-    
-    return int(irradiance * (PANEL_CAPACITY / 1000) * efficiency)
-
-def get_working_condition(irradiance):
-    """Returns the Status Label based on Irradiance Energy"""
-    if irradiance < 200:
-        return "LOW", "gray"
-    elif irradiance < 600:
-        return "MEDIUM", "orange"
-    else:
-        return "HIGH", "green"
-
-# --- 3. DATA SIMULATION (The "Predefined" 7 AM - 6 PM Data) ---
-@st.cache_data
-def generate_day_data():
-    # Create time range: 7:00 AM to 6:00 PM
-    hours = np.linspace(7, 18, 100)
-    data = []
-    
-    for h in hours:
-        # 1. Simulate Environment
-        sun_angle = get_sun_position(h)
-        
-        # Sun curve (Sine wave peak at noon)
-        sun_intensity = np.sin(((h-6)/12) * np.pi)
+    if is_daytime:
+        # Map 6am-6pm to -90 to +90 degrees
+        sun_angle = (hour - 12) * 15
+        # Sine wave intensity for light
+        sun_intensity = np.sin(((hour-6)/12) * np.pi)
         irradiance = int(max(0, sun_intensity * 1000))
         
-        # Temps
-        ambient_temp = 25 + (sun_intensity * 10) # 25C - 35C
+        # Temps rise during day
+        ambient_temp = 25 + (sun_intensity * 10)
+        # Wax heats up (Greenhouse effect)
+        wax_temp = ambient_temp + (sun_intensity * 45)
         
-        # Wax gets hot! (Greenhouse effect simulation)
-        # Normal operation: Wax follows sun intensity
-        wax_temp = ambient_temp + (sun_intensity * 50) 
+        # Panel Angle (Wax Expansion)
+        target_angle = -MAX_ROTATION + ((wax_temp - 35)/40 * (MAX_ROTATION*2))
+        panel_angle = np.clip(target_angle, -MAX_ROTATION, MAX_ROTATION)
         
-        # 2. Simulate Mechanics
-        panel_angle = get_wax_expansion_angle(wax_temp, ambient_temp)
+    else:
+        # NIGHT TIME LOGIC
+        sun_angle = -90 # Sun is gone
+        irradiance = 0
         
-        # 3. Simulate Power
-        power = calculate_power_output(irradiance, sun_angle, panel_angle)
+        # Temps cool down
+        ambient_temp = 20
+        wax_temp = 20 # Wax matches ambient at night
         
-        # 4. Status
-        condition, color = get_working_condition(irradiance)
+        # Panel Retracts (Spring return)
+        # At night, panel sits at -60 (East) waiting for morning
+        panel_angle = -60 
+
+    # B. Power Calculation
+    if is_daytime:
+        error_deg = abs(sun_angle - panel_angle)
+        efficiency = math.cos(math.radians(error_deg))
+        efficiency = max(0, efficiency)
+        power = int(irradiance * (PANEL_CAPACITY / 1000) * efficiency)
+    else:
+        power = 0
         
-        data.append({
-            "Time": f"{int(h):02d}:{int((h%1)*60):02d}",
-            "Sun_Angle": int(sun_angle),
-            "Panel_Angle": panel_angle,
-            "Ambient_Temp": round(ambient_temp, 1),
-            "Wax_Temp": round(wax_temp, 1),
-            "Irradiance": irradiance,
-            "Power": power,
-            "Condition": condition,
-            "Color": color
-        })
-        
-    return pd.DataFrame(data)
+    return {
+        "datetime": current_time,
+        "time_str": current_time.strftime("%H:%M"),
+        "is_day": is_daytime,
+        "sun_angle": int(sun_angle),
+        "panel_angle": int(panel_angle),
+        "ambient": round(ambient_temp, 1),
+        "wax_temp": round(wax_temp, 1),
+        "irradiance": irradiance,
+        "power": power
+    }
 
-df = generate_day_data()
+# --- 4. MAIN LOOP LOGIC ---
 
-# --- 4. DASHBOARD UI ---
+# 1. Calculate ONE step of physics
+live_data = get_live_physics(st.session_state.sim_time)
 
-# Initialize Session State for Animation
-if 'idx' not in st.session_state:
-    st.session_state.idx = 0
+# 2. Update Total Energy (Wh)
+# Power (W) * Hours (0.25 hours per tick)
+step_energy = live_data['power'] * (MINUTES_PER_TICK / 60)
+st.session_state.total_energy += step_energy
 
-# Sidebar Control
-with st.sidebar:
-    st.header("⚙️ Simulation Control")
-    speed = st.slider("Animation Speed", 0.05, 1.0, 0.2)
-    if st.button("Restart Day"):
-        st.session_state.idx = 0
-    
-    st.divider()
-    st.markdown("""
-    **System Limits:**
-    - Max Rotation: ±60°
-    - Panel Size: 250W
-    - Wax Melting: 25°C
-    """)
+# 3. Update History (For Charts)
+new_row = pd.DataFrame([{
+    'Time': live_data['datetime'], # Keep full datetime for sorting
+    'Sun_Angle': live_data['sun_angle'],
+    'Panel_Angle': live_data['panel_angle'],
+    'Power': live_data['power']
+}])
 
-# Main Layout
-st.title("☀️ Solar-X: Wax-Actuated Tracking System")
-st.markdown("**Real-time Telemetry & Power Generation Monitor**")
+# Add to history and keep only last 100 points (Rolling Window)
+st.session_state.data_history = pd.concat([st.session_state.data_history, new_row], ignore_index=True)
+if len(st.session_state.data_history) > 100:
+    st.session_state.data_history = st.session_state.data_history.iloc[1:]
 
-if st.session_state.idx < len(df):
-    row = df.iloc[st.session_state.idx]
-    
-    # --- SECTION 1: LIVE CAM & STATUS ---
-    col_cam, col_status = st.columns([1, 2])
-    
-    with col_cam:
-        st.write("📷 **Live Site View**")
-        # Placeholder image of a solar panel
-        st.image("https://images.unsplash.com/photo-1509391366360-2e959784a276?q=80&w=1000&auto=format&fit=crop", 
-                 caption=f"Panel Position: {row['Panel_Angle']}°", use_column_width=True)
-    
-    with col_status:
-        # Working Condition Badge
-        st.write("### System Efficiency Status")
-        if row['Color'] == "green":
-            st.success(f"🟢 **{row['Condition']} OUTPUT** - Tracking Optimal")
-        elif row['Color'] == "orange":
-            st.warning(f"🟠 **{row['Condition']} OUTPUT** - Partial Sun")
-        else:
-            st.info(f"⚪ **{row['Condition']} OUTPUT** - Low Light / Morning")
-            
-        st.divider()
-        
-        # Key Metrics Grid
-        m1, m2, m3 = st.columns(3)
-        m1.metric("⚡ Generated Power", f"{row['Power']} W")
-        m2.metric("☀ Solar Irradiance", f"{row['Irradiance']} W/m²")
-        m3.metric("📐 Panel Angle", f"{row['Panel_Angle']}°", delta=f"Sun at {row['Sun_Angle']}°")
-        
-        m4, m5, m6 = st.columns(3)
-        m4.metric("🌡 Wax Temp", f"{row['Wax_Temp']}°C")
-        m5.metric("🌡 Ambient Temp", f"{row['Ambient_Temp']}°C")
-        m6.metric("⏳ Time", row['Time'])
+# 4. Advance Time
+st.session_state.sim_time += timedelta(minutes=MINUTES_PER_TICK)
 
-    # --- SECTION 2: CHARTS ---
-    st.subheader("📊 Performance Analytics")
-    
-    # 1. Tracking Accuracy Chart
-    chart_data = df.iloc[:st.session_state.idx+1]
-    
-    # Prepare data for line chart
-    angle_chart = pd.DataFrame({
-        'Sun Position': chart_data['Sun_Angle'],
-        'Panel Position': chart_data['Panel_Angle']
-    })
-    st.line_chart(angle_chart, color=["#FFD700", "#0000FF"]) 
-    st.caption("Yellow: Sun Angle (-90 to +90) | Blue: Panel Angle (Limited to ±60)")
+# Check for new day
+if st.session_state.sim_time.hour == 0 and st.session_state.sim_time.minute == 0:
+    st.session_state.day_count += 1
 
-    # Auto-increment logic
-    time.sleep(speed)
-    st.session_state.idx += 1
-    st.rerun()
+# --- 5. DASHBOARD UI ---
 
+st.title("📡 Solar-X: Continuous Live Telemetry")
+st.markdown(f"**Status:** System Online | **Day:** {st.session_state.day_count} | **Time:** {live_data['time_str']}")
+
+# Status Banner
+if live_data['is_day']:
+    st.success(f"☀️ **DAYTIME MODE** - Tracking Active")
 else:
-    st.success("✅ Daily Generation Cycle Complete.")
-    if st.button("Start New Day"):
-        st.session_state.idx = 0
+    st.info(f"🌙 **NIGHT MODE** - System Retracting/Idle")
+
+# Metrics
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("⚡ Current Power", f"{live_data['power']} W")
+col2.metric("🔋 Total Harvested", f"{int(st.session_state.total_energy/1000)} kWh", f"+{int(step_energy)} Wh")
+col3.metric("🌡 Wax Temp", f"{live_data['wax_temp']} °C", f"{live_data['ambient']}° Amb")
+col4.metric("☀ Irradiance", f"{live_data['irradiance']} W/m²")
+
+# Visualization Split
+c_chart, c_cam = st.columns([2, 1])
+
+with c_cam:
+    st.write("**Live Angle Feed**")
+    # Dynamic image caption
+    img_caption = f"Panel: {live_data['panel_angle']}° | Sun: {live_data['sun_angle']}°"
+    
+    # Use a Dark image for night, Bright for day
+    if live_data['is_day']:
+        st.image("https://images.unsplash.com/photo-1509391366360-2e959784a276?q=80&w=600", caption=img_caption)
+    else:
+        # Night sky image
+        st.image("https://images.unsplash.com/photo-1504608524841-42fe6f032b4b?q=80&w=600", caption=img_caption + " (Night)")
+
+with c_chart:
+    st.write("**Performance Trend (Last 24 Hours)**")
+    # Clean chart data
+    chart_df = st.session_state.data_history.copy()
+    chart_df = chart_df.set_index("Time")
+    
+    # Show two separate charts or one combined? Combined is better.
+    st.line_chart(chart_df[['Sun_Angle', 'Panel_Angle']], color=["#FDB813", "#0072CE"])
+
+# --- 6. AUTO-REFRESH (The Infinite Loop) ---
+time.sleep(REFRESH_RATE)
+st.rerun()
